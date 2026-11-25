@@ -12,6 +12,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js"></script>
   <script>
@@ -4789,7 +4790,7 @@ function impexpHTML(){
   return `<div class="settings-card">
     <h3 class="panel-title">${icon("library",16)} Import / Export Data Buku</h3>
     <p class="hint" style="margin-bottom:10px;">Format yang didukung: CSV, Excel (.xlsx/.xls), PDF, dan Word (.docx). Sistem sekarang juga mengenali format <b>BUKU BESAR MAKTABAH</b> dari PDF/Word dan tidak lagi bergantung pada header yang harus persis sama.</p>
-    <p class="hint" style="margin-bottom:10px;">Kolom standar: kode, kategori, judul, penyusun/pengarang, penerbit, tahun terbit, sumber, tanggal diterima, rak, keterangan.</p>
+    <p class="hint" style="margin-bottom:10px;">Kolom standar: kode, kategori, judul, penyusun/pengarang, penerbit, tahun terbit, sumber, tanggal diterima, rak, keterangan. Kolom <b>sumber</b> di Excel hasil export berupa pilihan Beli / Infak.</p>
     <button class="btn btn-outline btn-block" id="exportBukuExcel">${icon("download",15)} Export Data Buku (.xlsx)</button>
     <p class="hint" style="margin:7px 0 12px;">Cover lama yang lebih dari 70 KB akan dikompres ulang. Cover yang sudah ≤70 KB tidak diproses.</p>
     <div class="field" style="margin-top:12px;"><label class="field-label">Import Data Buku</label><input type="file" id="importBukuFile" accept=".csv,.xlsx,.xls,.pdf,.docx"/></div>
@@ -4797,7 +4798,7 @@ function impexpHTML(){
     <hr style="border:none;border-top:1px dashed var(--line);margin:18px 0;"/>
 
     <h3 class="panel-title">${icon("users",16)} Import / Export Data Anggota</h3>
-    <p class="hint" style="margin-bottom:10px;">Kolom anggota standar: nis, nama, kelas, lp, alamat, tglDaftar. PDF daftar santri juga dapat dibaca dari baris yang berisi NIS + nama + kelas.</p>
+    <p class="hint" style="margin-bottom:10px;">Kolom anggota standar: nis, nama, unit, lp, alamat, tglDaftar. Di file Excel hasil export, kolom <b>unit</b> (Kelas 1 sampai Pengurus, dst.) dan <b>lp</b> (L/P) berupa pilihan. File lama dengan kolom "kelas" tetap bisa diimpor. PDF daftar santri juga dapat dibaca dari baris yang berisi NIS + nama + kelas.</p>
     <button class="btn btn-outline btn-block" id="exportAnggotaExcel">${icon("download",15)} Export Data Anggota (.xlsx)</button>
     <div class="field" style="margin-top:12px;"><label class="field-label">Import Data Anggota</label><input type="file" id="importAnggotaFile" accept=".csv,.xlsx,.xls,.pdf,.docx"/></div>
 
@@ -4812,6 +4813,46 @@ function normalizeImportKey(v){
 }
 function cleanImportCell(v){
   return String(v??"").replace(/\u00a0/g," ").replace(/[\u0000-\u001f]/g," ").replace(/\s+/g," ").trim();
+}
+function sumberNormalize(v){
+  const s=cleanImportCell(v);
+  if(/^infa[kq]/i.test(s)) return "Infak";
+  if(/^(beli|pembelian)$/i.test(s)) return "Beli";
+  return s||"Beli";
+}
+/* Export Excel dengan kolom pilihan (dropdown). Daftar pilihan disimpan di sheet tersembunyi "Pilihan".
+   Jika ExcelJS gagal dimuat, otomatis memakai export lama (tanpa dropdown). Mengembalikan true jika dropdown berhasil dibuat. */
+async function downloadXlsxWithDropdowns(sheetName, rows, filename, dropdowns){
+  if(typeof ExcelJS==="undefined"){
+    const wb0=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb0,XLSX.utils.aoa_to_sheet(rows),sheetName); XLSX.writeFile(wb0,filename);
+    return false;
+  }
+  const wb=new ExcelJS.Workbook();
+  const ws=wb.addWorksheet(sheetName);
+  rows.forEach(r=>ws.addRow(r));
+  ws.getRow(1).font={bold:true};
+  ws.views=[{state:"frozen",ySplit:1}];
+  (rows[0]||[]).forEach((_,i)=>{
+    let w=10; rows.slice(0,200).forEach(r=>{ w=Math.max(w,String(r[i]??"").length+2); });
+    ws.getColumn(i+1).width=Math.min(w,45);
+  });
+  const ls=wb.addWorksheet("Pilihan");
+  const lastRow=Math.max(1000, rows.length+500);
+  dropdowns.forEach((d,k)=>{
+    d.values.forEach((v,j)=>{ ls.getCell(j+1,k+1).value=v; });
+    const L=String.fromCharCode(65+k);
+    const ref=`Pilihan!$${L}$1:$${L}$${d.values.length}`;
+    for(let r=2;r<=lastRow;r++){
+      ws.getCell(r,d.col).dataValidation={type:"list",allowBlank:true,formulae:[ref],showErrorMessage:true,errorStyle:"stop",errorTitle:d.title,error:d.error};
+    }
+  });
+  ls.state="hidden";
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  return true;
 }
 function normalizeBookCode(v){
   const s=cleanImportCell(v).toUpperCase();
@@ -4881,7 +4922,7 @@ function headerMap(rows){
   const normalized=(rows||[]).map(r=>r.map(normalizeImportKey));
   let best=0, score=-1;
   normalized.slice(0,12).forEach((r,i)=>{
-    const sc=r.filter(x=>["kode","kodebuku","nomor","nomorbuku","judul","judulbuku","nama","nis","kelas","penyusun","pengarang","penerbit","tahun","tahunterbit"].includes(x)).length;
+    const sc=r.filter(x=>["kode","kodebuku","nomor","nomorbuku","judul","judulbuku","nama","nis","kelas","unit","penyusun","pengarang","penerbit","tahun","tahunterbit"].includes(x)).length;
     if(sc>score){score=sc;best=i;}
   });
   return {h:normalized[best]||[], rows:(rows||[]).slice(best+1), headerIndex:best};
@@ -5059,7 +5100,7 @@ async function importBooksFromFile(file){
       importedRows.forEach(d=>{
         const kode=normalizeBookCode(d.kode); if(!kode||!d.judul){skipped++;return;}
         if(state.books.some(b=>normalizeBookCode(b.kode)===kode)){skipped++;return;}
-        state.books.push({id:uid(),kode,kategori:d.kategori||kode[0]||"A",judul:cleanImportCell(d.judul),penyusun:cleanImportCell(d.penyusun),penerbit:cleanImportCell(d.penerbit),tahunTerbit:parseYear(d.tahunTerbit),sumber:cleanImportCell(d.sumber)||"Beli",tanggalDiterima:d.tanggalDiterima||iso(todayDate),rak:cleanImportCell(d.rak),keterangan:cleanImportCell(d.keterangan),statusFisik:"baik"});
+        state.books.push({id:uid(),kode,kategori:d.kategori||kode[0]||"A",judul:cleanImportCell(d.judul),penyusun:cleanImportCell(d.penyusun),penerbit:cleanImportCell(d.penerbit),tahunTerbit:parseYear(d.tahunTerbit),sumber:sumberNormalize(d.sumber),tanggalDiterima:d.tanggalDiterima||iso(todayDate),rak:cleanImportCell(d.rak),keterangan:cleanImportCell(d.keterangan),statusFisik:"baik"});
         added++;
       });
     },{success:`Import buku selesai: ${added} masuk, ${skipped} dilewati.`});
@@ -5072,7 +5113,7 @@ async function importMembersFromFile(file){
 
   // First try a normal spreadsheet/table header.
   const {h,rows:body}=headerMap(rows);
-  const aliases={nis:["nis","nomorinduk","nomorinduksantri","id"],nama:["nama","name","namasantri"],kelas:["kelas","class","tingkat"],lp:["lp","jeniskelamin","jk","jenis kelamin","gender"],alamat:["alamat","address"],tglDaftar:["tgldaftar","tanggaldaftar","tanggal"]};
+  const aliases={nis:["nis","nomorinduk","nomorinduksantri","id"],nama:["nama","name","namasantri"],kelas:["kelas","unit","class","tingkat"],lp:["lp","jeniskelamin","jk","jenis kelamin","gender"],alamat:["alamat","address"],tglDaftar:["tgldaftar","tanggaldaftar","tanggal"]};
   let candidates=[];
   const hasHeader=findHeaderIndex(h,["nama","name","namasantri"])>=0 || findHeaderIndex(h,["nis","nomorinduk","nomorinduksantri"])>=0;
 
@@ -5142,7 +5183,7 @@ async function importMembersFromFile(file){
         if(!nama){skipped++;return;}
         const nk=nama.toLowerCase();
         if((nis&&(existingNis.has(nis)||incomingNis.has(nis)))||existingNames.has(nk)||incomingNames.has(nk)){skipped++;return;}
-        state.anggota.push({id:uid(),nis,nama,kelas:cleanImportCell(d.kelas)||"1",lp:(cleanImportCell(d.lp)||"L").toUpperCase()==="P"?"P":"L",alamat:cleanImportCell(d.alamat),tglDaftar:parseDateFlexible(d.tglDaftar)||iso(todayDate)});
+        state.anggota.push({id:uid(),nis,nama,kelas:unitNormalize(d.kelas)||"1",lp:(cleanImportCell(d.lp)||"L").toUpperCase()==="P"?"P":"L",alamat:cleanImportCell(d.alamat),tglDaftar:parseDateFlexible(d.tglDaftar)||iso(todayDate)});
         if(nis) incomingNis.add(nis); incomingNames.add(nk); added++;
       });
     },{success:`Import anggota selesai: ${added} masuk, ${skipped} dilewati.`});
@@ -5153,9 +5194,12 @@ function bindImpexp(){
   const optimizeBtn=document.getElementById("btnOptimizeAllCovers");
   if(optimizeBtn) optimizeBtn.addEventListener("click", optimizeAllBookCovers);
   const eb=document.getElementById("exportBukuExcel");
-  if(eb) eb.addEventListener("click", ()=>{
+  if(eb) eb.addEventListener("click", async ()=>{
     const rows=[["kode","kategori","judul","penyusun","penerbit","tahunTerbit","sumber","tanggalDiterima","rak","keterangan"],...state.books.map(b=>[b.kode,b.kategori,b.judul,b.penyusun,b.penerbit,b.tahunTerbit,b.sumber,b.tanggalDiterima,b.rak,b.keterangan])];
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),"Buku"); XLSX.writeFile(wb,`data-buku-${iso(todayDate)}.xlsx`); showToast("Data buku diekspor Excel","plum");
+    try{
+      const ok=await downloadXlsxWithDropdowns("Buku",rows,`data-buku-${iso(todayDate)}.xlsx`,[{col:7,values:["Beli","Infak"],title:"Sumber buku",error:"Pilih Beli atau Infak dari daftar."}]);
+      showToast(ok?"Data buku diekspor Excel (kolom sumber berupa pilihan)":"Data buku diekspor Excel","plum");
+    }catch(err){ console.error(err); showToast("Export buku gagal: "+(err.message||err),"rose"); }
   });
   const ib=document.getElementById("importBukuFile");
   if(ib) ib.addEventListener("change", async e=>{
@@ -5166,9 +5210,16 @@ function bindImpexp(){
     finally{ ib.value=""; }
   });
   const ea=document.getElementById("exportAnggotaExcel");
-  if(ea) ea.addEventListener("click", ()=>{
-    const rows=[["nis","nama","kelas","lp","alamat","tglDaftar"],...state.anggota.map(a=>[a.nis,a.nama,a.kelas,a.lp,a.alamat,a.tglDaftar])];
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),"Anggota"); XLSX.writeFile(wb,`data-anggota-${iso(todayDate)}.xlsx`); showToast("Data anggota diekspor Excel","plum");
+  if(ea) ea.addEventListener("click", async ()=>{
+    const unitList=unitOptions("").map(unitLabel);
+    const rows=[["nis","nama","unit","lp","alamat","tglDaftar"],...state.anggota.map(a=>[a.nis,a.nama,a.kelas?unitLabel(a.kelas):"",a.lp,a.alamat,a.tglDaftar])];
+    try{
+      const ok=await downloadXlsxWithDropdowns("Anggota",rows,`data-anggota-${iso(todayDate)}.xlsx`,[
+        {col:3,values:unitList,title:"Unit",error:"Pilih unit dari daftar. Unit baru ditambahkan dulu di Sistem > Pengaturan."},
+        {col:4,values:["L","P"],title:"L/P",error:"Pilih L atau P dari daftar."}
+      ]);
+      showToast(ok?"Data anggota diekspor Excel (unit & L/P berupa pilihan)":"Data anggota diekspor Excel","plum");
+    }catch(err){ console.error(err); showToast("Export anggota gagal: "+(err.message||err),"rose"); }
   });
   const ia=document.getElementById("importAnggotaFile");
   if(ia) ia.addEventListener("change", async e=>{
