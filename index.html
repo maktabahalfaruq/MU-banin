@@ -1724,7 +1724,7 @@ function enqueuePrivateSave(){
   maktabahSavePending++;
   maktabahSaveQueue=maktabahSaveQueue.catch(()=>{}).then(async()=>{
     maktabahSaveInFlight++;
-    try{ await savePrivateFirebase(); }
+    try{ await withTimeout(savePrivateFirebase(),30000,"Penyimpanan ke Firebase (koneksi lambat atau terputus)"); }
     finally{
       maktabahSaveInFlight=Math.max(0,maktabahSaveInFlight-1);
       maktabahSavePending=Math.max(0,maktabahSavePending-1);
@@ -2234,7 +2234,7 @@ let toastTimer=null;
 function showToast(msg, tone){
   const root=document.getElementById("toastRoot"); if(!root) return;
   root.innerHTML = `<div class="toast" style="background:${tone==='rose'?'var(--rose)':'var(--plum)'}">${esc(msg)}</div>`;
-  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{ root.innerHTML=""; }, 2600);
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{ root.innerHTML=""; }, tone==='rose'?7000:2600);
 }
 
 
@@ -3216,7 +3216,24 @@ function kategoriBodyHTML(){
   `;
 }
 function bindKategoriBody(afterChange){
-  document.getElementById("addKatBtn").addEventListener("click", async()=>{ await addKategoriFromForm(); afterChange(); });
+  document.getElementById("addKatBtn").addEventListener("click", async()=>{
+    const kodeVal=document.getElementById("nk_kode")?.value||"";
+    const namaVal=document.getElementById("nk_nama")?.value||"";
+    const btn=document.getElementById("addKatBtn");
+    if(btn){ btn.disabled=true; btn.textContent="Menyimpan..."; }
+    let ok=false;
+    try{ ok=await addKategoriFromForm(); }
+    finally{
+      const b2=document.getElementById("addKatBtn");
+      if(b2){ b2.disabled=false; b2.textContent="Tambah"; }
+    }
+    afterChange();
+    if(ok===false){
+      // Gagal/ditolak: kembalikan isian supaya tidak perlu mengetik ulang.
+      const k=document.getElementById("nk_kode"), n=document.getElementById("nk_nama");
+      if(k) k.value=kodeVal; if(n) n.value=namaVal;
+    }
+  });
   document.querySelectorAll("[data-kat-color]").forEach(inp=>inp.addEventListener("change", e=>{ updateKategoriField(inp.dataset.katColor,"color",e.target.value); }));
   document.querySelectorAll("[data-kat-kode]").forEach(inp=>inp.addEventListener("change", async e=>{ await updateKategoriField(inp.dataset.katKode,"kode",e.target.value); afterChange(); }));
   document.querySelectorAll("[data-kat-nama]").forEach(inp=>inp.addEventListener("change", e=>{ updateKategoriField(inp.dataset.katNama,"nama",e.target.value); }));
@@ -3224,15 +3241,16 @@ function bindKategoriBody(afterChange){
 }
 function bindKategoriPage(){ bindKategoriBody(()=>{ renderContent(); }); }
 async function addKategoriFromForm(){
-  if(!guardAdmin()) return;
+  if(!guardAdmin()) return false;
   const kode=(document.getElementById("nk_kode").value||"").trim().toUpperCase();
   const nama=(document.getElementById("nk_nama").value||"").trim();
-  if(!kode||!nama) return;
-  if(state.kategoriList.some(k=>k.kode===kode)){showToast(`Kode kategori "${kode}" sudah ada`,"rose");return;}
+  if(!kode||!nama){showToast("Isi kode dan nama kategori dulu, lalu tekan Tambah.","rose");return false;}
+  if(state.kategoriList.some(k=>k.kode===kode)){showToast(`Kode kategori "${kode}" sudah ada`,"rose");return false;}
   try{
     await commitMaktabahMutation(()=>{state.kategoriList=[...state.kategoriList,{kode,nama,color:KAT_PALETTE[state.kategoriList.length%KAT_PALETTE.length]}];},
       {success:`Kategori "${nama}" berhasil ditambahkan.`});
-  }catch(e){console.error("Tambah kategori gagal",e);}
+    return true;
+  }catch(e){console.error("Tambah kategori gagal",e); return false;}
 }
 async function updateKategoriField(oldKode,field,value){
   if(!guardAdmin()) return;
@@ -4642,7 +4660,7 @@ function aksesHTML(){
     <div id="akMsg" class="hint" style="margin-top:8px;"></div>
     <h4 style="margin:18px 0 8px;font-size:14px;">Daftar Akun</h4>
     <div id="akList" class="hint">Memuat…</div>
-    <p class="hint" style="margin-top:10px;">Mencabut akses menghapus peran akun sehingga tidak bisa membuka data. Untuk reset password orang lain, gunakan Firebase Console (Authentication).</p>
+    <p class="hint" style="margin-top:10px;">Mencabut akses menghapus peran akun sehingga tidak bisa membuka data. Jika petugas lupa password: klik <b>Cabut</b> pada akun lamanya, lalu buat akun baru dengan username lain (mis. petugas1b) dan password baru. Setiap pengguna bisa mengganti password sendiri di menu pengaturan. Sebaiknya punya minimal dua akun Admin.</p>
   </div>`:''}`;
 }
 async function loadAkunList(){
